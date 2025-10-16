@@ -1,0 +1,29 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app__main {
+  flex: 1;
+  background-color: #f8f9fa;
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+  .app__main {
+    padding-top: 10px;
+  }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+  .app__main {
+    padding-top: 15px;
+  }
+}
+
+@media (min-width: 769px) {
+  .app__main {
+    padding-top: 20px;
+  }
+}
