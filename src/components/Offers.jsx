@@ -97,8 +97,20 @@ const Offers = ({ onClose }) => {
     : offers.filter(offer => offer.category === selectedCategory);
 
   const handleCopyCode = (code) => {
-    navigator.clipboard.writeText(code);
-    alert(`Coupon code "${code}" copied to clipboard!`);
+    navigator.clipboard.writeText(code).then(() => {
+      // Visual feedback instead of alert - could be replaced with toast notification
+      const button = event.target;
+      const originalText = button.textContent;
+      button.textContent = 'Copied!';
+      button.style.backgroundColor = '#10b981';
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.style.backgroundColor = '';
+      }, 2000);
+    }).catch(() => {
+      // Fallback for older browsers
+      console.log(`Coupon code: ${code}`);
+    });
   };
 
   const formatDate = (dateString) => {

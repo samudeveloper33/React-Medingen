@@ -109,11 +109,6 @@ export const medicineAPI = {
     return { data: await parseResponse(response) };
   },
   
-  // Get medicine descriptions
-  getMedicineDescriptions: async (id) => {
-    const response = await apiFetch(`/description/?product_id=${id}`);
-    return { data: await parseResponse(response) };
-  },
   
   // Get alternative medicines based on category, generic name, or similar uses
   getAlternativeMedicines: async (medicineId, params = {}) => {
@@ -126,7 +121,7 @@ export const medicineAPI = {
   
   // Search medicines by category
   searchByCategory: async (category) => {
-    const params = { category: category, per_page: 20 };
+    const params = { category: category, per_page: 100 };
     const queryString = new URLSearchParams(params).toString();
     const response = await apiFetch(`/products/?${queryString}`);
     return { data: await parseResponse(response) };
@@ -134,7 +129,7 @@ export const medicineAPI = {
   
   // Search medicines by generic name
   searchByGeneric: async (genericName) => {
-    const params = { generic_name: genericName, per_page: 20 };
+    const params = { generic_name: genericName, per_page: 100 };
     const queryString = new URLSearchParams(params).toString();
     const response = await apiFetch(`/products/?${queryString}`);
     return { data: await parseResponse(response) };
@@ -149,6 +144,14 @@ export const medicineAPI = {
   // Get review stats
   getReviewStats: async (medicineId) => {
     const response = await apiFetch(`/reviews/stats/${medicineId}`);
+    return { data: await parseResponse(response) };
+  },
+
+  // Get all reviews (for showing recent reviews across all products)
+  getAllReviews: async (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    const endpoint = `/reviews/${queryString ? `?${queryString}` : ''}`;
+    const response = await apiFetch(endpoint);
     return { data: await parseResponse(response) };
   },
 };
@@ -214,48 +217,79 @@ export const userAPI = {
   },
 };
 
+// Configuration API endpoints
+export const configAPI = {
+  // Get all app configuration
+  getAllConfig: async () => {
+    const response = await apiFetch('/config/');
+    return { data: await parseResponse(response) };
+  },
+  
+  // Get specific configuration by key
+  getConfig: async (key) => {
+    const response = await apiFetch(`/config/${key}`);
+    return { data: await parseResponse(response) };
+  },
+  
+  // Get configurations by category (prefix)
+  getConfigByCategory: async (category) => {
+    const response = await apiFetch(`/config/by-category/${category}`);
+    return { data: await parseResponse(response) };
+  },
+};
+
 // Data transformation utilities for Flask API compatibility
 export const dataTransformUtils = {
   // Transform Flask product data to frontend model
   transformProductFromBackend: (product) => {
     if (!product) return null;
     
-    // Use exact database pricing without modification
-    const basePrice = parseFloat(product.price) || 100;
-    const discount = 0; // No random discount - use exact database price
-    const discountedPrice = basePrice; // Same as base price
+    // Calculate realistic pricing with discounts
+    const basePrice = parseFloat(product.price) || 0;
+    // Add realistic discount based on price range
+    let discount = 0;
+    if (basePrice > 80) {
+      discount = 20; // 20% off for expensive medicines
+    } else if (basePrice > 50) {
+      discount = 15; // 15% off for mid-range
+    } else if (basePrice > 30) {
+      discount = 10; // 10% off for lower range
+    } else {
+      discount = 5; // 5% off for cheapest
+    }
+    
+    const discountedPrice = Math.round(basePrice * (1 - discount / 100));
     
     return {
       id: product.id,
-      name: product.name || 'Unknown Medicine',
-      genericName: product.generic_name || product.name || 'Generic',
-      manufacturer: product.brand || 'Generic Pharma',
-      brand: product.brand || 'Generic Pharma',
+      name: product.name,
+      genericName: product.generic_name || product.name,
+      manufacturer: product.brand,
+      brand: product.brand,
       price: basePrice,
       discountedPrice: Math.round(discountedPrice),
       discount: discount,
-      rating: product.avg_rating || (3.5 + Math.random() * 1.5),
-      reviewCount: (product.reviews && product.reviews.length) || Math.floor(Math.random() * 50) + 10,
-      description: product.description || `${product.name} is a medicine used for various therapeutic purposes.`,
-      dosage: product.dosage || 'Standard dosage',
-      packSize: product.pack_size || '15 tablets',
+      rating: product.avg_rating,
+      reviewCount: (product.reviews && product.reviews.length) || 0,
+      description: product.description,
+      dosage: product.dosage,
+      packSize: product.pack_size,
       prescription: product.prescription_required ? 'Prescription required' : 'No prescription required',
-      prescriptionRequired: product.prescription_required || false,
-      sideEffects: Array.isArray(product.side_effects) ? product.side_effects : (product.side_effects ? JSON.parse(product.side_effects) : ['Consult your doctor for side effects']),
-      uses: Array.isArray(product.uses) ? product.uses : (product.uses ? JSON.parse(product.uses) : ['General health support']),
-      howItWorks: product.how_it_works || 'Consult your healthcare provider for detailed mechanism of action.',
+      prescriptionRequired: product.prescription_required,
+      sideEffects: Array.isArray(product.side_effects) ? product.side_effects : (product.side_effects ? JSON.parse(product.side_effects) : []),
+      uses: Array.isArray(product.uses) ? product.uses : (product.uses ? JSON.parse(product.uses) : []),
+      howItWorks: product.how_it_works,
       faqContent: Array.isArray(product.faq_content) ? product.faq_content : (product.faq_content ? JSON.parse(product.faq_content) : []),
-      image: product.image_url || `https://images.unsplash.com/photo-1587854692152-cbe660dbde88?w=300&h=200&fit=crop`,
-      imageUrl: product.image_url || `https://images.unsplash.com/photo-1587854692152-cbe660dbde88?w=300&h=200&fit=crop`,
-      chemicalFormula: product.chemical_form || dataTransformUtils.generateChemicalFormula(product.name),
-      chemicalForm: product.chemical_form || dataTransformUtils.generateChemicalFormula(product.name),
-      availability: Math.random() > 0.2 ? 'In Stock' : 'Limited Stock',
-      category: product.category || 'General Medicine',
+      image: product.image_url || null,
+      imageUrl: product.image_url || null,
+      chemicalFormula: product.chemical_form,
+      chemicalForm: product.chemical_form,
+      availability: product.availability,
+      category: product.category,
       createdAt: product.created_at,
       // Additional database fields
-      salts: product.salts || [],
-      reviews: product.reviews || [],
-      descriptions: product.descriptions || []
+      salts: product.salts,
+      reviews: product.reviews
     };
   },
   
@@ -280,35 +314,21 @@ export const dataTransformUtils = {
     };
   },
   
-  // Generate consistent chemical formula
-  generateChemicalFormula: (medicineName) => {
-    if (!medicineName) return 'C8H9NO2';
-    const formulas = [
-      'C8H9NO2', 'C17H19NO3', 'C14H18N2O', 'C13H16ClNO',
-      'C22H29FO5', 'C16H16ClNO2', 'C15H17NO2', 'C9H13NO3'
-    ];
-    const hash = medicineName.split('').reduce((a, b) => {
-      a = ((a << 5) - a) + b.charCodeAt(0);
-      return a & a;
-    }, 0);
-    return formulas[Math.abs(hash) % formulas.length];
-  },
-  
   // Transform paginated response
   transformPaginatedResponse: (response) => {
     const data = response.data;
     return {
       products: (data.products || data || []).map(dataTransformUtils.transformProductFromBackend),
       pagination: {
-        total: data.total || 0,
-        pages: data.pages || 1,
-        currentPage: data.current_page || 1,
-        perPage: data.per_page || 20,
-        hasNext: data.has_next || false,
-        hasPrev: data.has_prev || false
+        total: data.total,
+        pages: data.pages,
+        currentPage: data.current_page,
+        perPage: data.per_page,
+        hasNext: data.has_next,
+        hasPrev: data.has_prev
       }
     };
   }
 };
 
-export default { medicineAPI, reviewsAPI, saltsAPI, userAPI, dataTransformUtils };
+export default { medicineAPI, reviewsAPI, saltsAPI, userAPI, configAPI, dataTransformUtils };

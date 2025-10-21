@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { medicineAPI, dataTransformUtils } from '../services/api';
+import { medicineAPI, configAPI, dataTransformUtils } from '../services/api';
 import './ProductDetail.css';
 
 // Component now fetches all data dynamically from backend API
@@ -14,22 +14,36 @@ const ProductDetail = () => {
   const [selectedForComparison, setSelectedForComparison] = useState([]);
   const [alternativeMedicines, setAlternativeMedicines] = useState([]);
   const [alternativesLoading, setAlternativesLoading] = useState(false);
+  const [config, setConfig] = useState({});
+  const [configLoading, setConfigLoading] = useState(true);
 
   // No hardcoded data - all data comes from Flask API
 
   useEffect(() => {
-    // Load medicines and reviews from Flask API only
+    // Load configuration and medicines from Flask API only
     const loadData = async () => {
       try {
         setLoading(true);
         setCompareLoading(true);
+        setConfigLoading(true);
+        
+        // Load app configuration first
+        try {
+          const configResponse = await configAPI.getAllConfig();
+          setConfig(configResponse.data.config || {});
+        } catch (configError) {
+          console.error('Error loading configuration:', configError);
+          // Continue with default values if config fails
+        } finally {
+          setConfigLoading(false);
+        }
         
         // Get all products from Flask API
-        
-        const response = await medicineAPI.getAllMedicines({ per_page: 15 });
+        const response = await medicineAPI.getAllMedicines({ per_page: 50 });
         
         const products = response.data.products || response.data || [];
         
+        // Process fetched database data
         
         if (products.length > 0) {
           // Use centralized data transformation utility
@@ -47,11 +61,11 @@ const ProductDetail = () => {
           }
         } else {
           // Show error if no products in database
-          setError('No medicines found in database. Please contact administrator.');
+          setError(config['error.no_medicines'] || 'No medicines found in database. Please contact administrator.');
         }
       } catch (error) {
         console.error('❌ Error loading medicines:', error);
-        setError('Failed to load medicines from server. Please try again later.');
+        setError(config['error.loading_failed'] || 'Failed to load medicines from server. Please try again later.');
       } finally {
         setLoading(false);
         setCompareLoading(false);
@@ -60,12 +74,21 @@ const ProductDetail = () => {
 
     const loadReviews = async (medicineId) => {
       try {
-        const reviewResponse = await medicineAPI.getMedicineReviews(medicineId);
+        // Get all recent reviews instead of just for current product
+        const reviewResponse = await medicineAPI.getAllReviews({ per_page: 10 });
         const reviewsData = reviewResponse.data.reviews || [];
         setReviews(reviewsData);
       } catch (error) {
         console.error('Error loading reviews:', error);
-        setReviews([]);
+        // Fallback to product-specific reviews if general reviews fail
+        try {
+          const productReviewResponse = await medicineAPI.getMedicineReviews(medicineId);
+          const productReviewsData = productReviewResponse.data.reviews || [];
+          setReviews(productReviewsData);
+        } catch (fallbackError) {
+          console.error('Fallback review loading also failed:', fallbackError);
+          setReviews([]);
+        }
       }
     };
 
@@ -73,105 +96,49 @@ const ProductDetail = () => {
     loadData();
   }, []);
 
-  // Load alternative medicines based on current selection via Flask API
+  // Load all products from database to show in Generic Medicine Alternative section
   const loadAlternativeMedicines = async (currentMedicine) => {
     if (!currentMedicine) return;
     
     try {
       setAlternativesLoading(true);
-      console.log(`🔍 Loading alternatives for ${currentMedicine.name} via API...`);
+      // Loading all products for Generic Medicine Alternative section
       
-      // Try to get alternatives from Flask API using multiple strategies
-      let alternatives = [];
+      let allAlternatives = [];
       
+      // Fetch ALL medicines from database and show them (except current medicine)
       try {
-        // Strategy 1: Get medicines by same category via API
-        if (currentMedicine.category) {
-          
-          const categoryResponse = await medicineAPI.searchByCategory(currentMedicine.category);
-          const categoryMedicines = categoryResponse.data.products || categoryResponse.data || [];
-          
-          
-          // Filter out current medicine and add to alternatives
-          const categorySimilar = categoryMedicines
-            .filter(med => med.id !== currentMedicine.id)
-            .slice(0, 3)
-            .map(medicine => {
-              const transformed = dataTransformUtils.transformProductFromBackend(medicine);
-              return {
-                ...transformed,
-                alternativeReason: 'same',
-                savingsPercent: Math.round(((currentMedicine.price - transformed.price) / currentMedicine.price) * 100),
-                priceComparison: transformed.price < currentMedicine.price ? 'cheaper' : 
-                                transformed.price > currentMedicine.price ? 'expensive' : 'same'
-              };
-            });
-          
-          alternatives.push(...categorySimilar);
-        }
+        const allMedicinesResponse = await medicineAPI.getAllMedicines({ per_page: 1000 });
+        const allMedicines = allMedicinesResponse.data.products || allMedicinesResponse.data || [];
         
-        // Strategy 2: Get medicines by generic name via API
-        if (currentMedicine.genericName && alternatives.length < 4) {
-          
-          const genericResponse = await medicineAPI.searchByGeneric(currentMedicine.genericName);
-          const genericMedicines = genericResponse.data.products || genericResponse.data || [];
-          
-          
-          const genericSimilar = genericMedicines
-            .filter(med => med.id !== currentMedicine.id && !alternatives.find(alt => alt.id === med.id))
-            .slice(0, 4 - alternatives.length)
-            .map(medicine => {
-              const transformed = dataTransformUtils.transformProductFromBackend(medicine);
-              return {
-                ...transformed,
-                alternativeReason: 'generic',
-                savingsPercent: Math.round(((currentMedicine.price - transformed.price) / currentMedicine.price) * 100),
-                priceComparison: transformed.price < currentMedicine.price ? 'cheaper' : 
-                                transformed.price > currentMedicine.price ? 'expensive' : 'same'
-              };
-            });
-          
-          alternatives.push(...genericSimilar);
-        }
-        
-        // Strategy 3: Get general alternatives if still need more
-        if (alternatives.length < 4) {
-          
-          const generalResponse = await medicineAPI.getAlternativeMedicines(currentMedicine.id, { per_page: 10 });
-          const generalMedicines = generalResponse.data.products || generalResponse.data || [];
-          
-          
-          const generalSimilar = generalMedicines
-            .filter(med => !alternatives.find(alt => alt.id === med.id))
-            .slice(0, 6 - alternatives.length)
-            .map(medicine => {
-              const transformed = dataTransformUtils.transformProductFromBackend(medicine);
-              return {
-                ...transformed,
-                alternativeReason: 'similar',
-                savingsPercent: Math.round(((currentMedicine.price - transformed.price) / currentMedicine.price) * 100),
-                priceComparison: transformed.price < currentMedicine.price ? 'cheaper' : 
-                                transformed.price > currentMedicine.price ? 'expensive' : 'same'
-              };
-            });
-          
-          alternatives.push(...generalSimilar);
-        }
-        
+        // Show ALL products except the currently selected one
+        allAlternatives = allMedicines
+          .filter(med => med.id !== currentMedicine.id)
+          .map(medicine => {
+            const transformed = dataTransformUtils.transformProductFromBackend(medicine);
+            // Calculate price comparison with current medicine
+            const savingsPercent = Math.round(((currentMedicine.price - transformed.price) / currentMedicine.price) * 100);
+            return {
+              ...transformed,
+              alternativeReason: 'all_products',
+              savingsPercent: savingsPercent,
+              priceComparison: transformed.price < currentMedicine.price ? 'cheaper' : 
+                              transformed.price > currentMedicine.price ? 'expensive' : 'same'
+            };
+          })
+          // Sort by price (cheapest first)
+          .sort((a, b) => a.price - b.price);
         
         
       } catch (apiError) {
-        console.log('⚠️ Flask API calls failed for alternatives');
-        // No fallback - show empty alternatives if API fails
-        alternatives = [];
+        console.error('⚠️ API call failed for loading all products:', apiError);
+        allAlternatives = [];
       }
       
-      setAlternativeMedicines(alternatives);
-      
+      setAlternativeMedicines(allAlternatives);
       
     } catch (error) {
-      console.error('Error loading alternative medicines:', error);
-      // No fallback - show empty alternatives if API fails
+      console.error('❌ Error loading all products:', error);
       setAlternativeMedicines([]);
     } finally {
       setAlternativesLoading(false);
@@ -197,7 +164,7 @@ const ProductDetail = () => {
         <div className="container">
           <div className="product-detail__spinner">
             <div className="spinner"></div>
-            <p>Loading medicine information...</p>
+            <p>{config['loading.medicines'] || 'Loading medicine information...'}</p>
           </div>
         </div>
       </div>
@@ -209,11 +176,28 @@ const ProductDetail = () => {
       <div className="product-detail__error">
         <div className="container">
           <div className="product-detail__error-message">
-            <h2>Oops! Something went wrong</h2>
+            <h2>🚨 Medicine Data Not Loading</h2>
             <p>{error}</p>
             <button onClick={() => window.location.reload()} className="retry-button">
-              Try Again
+              🔄 Try Again
             </button>
+          </div>
+          
+          
+          <div style={{ 
+            marginTop: '20px', 
+            padding: '20px', 
+            backgroundColor: '#f0f9ff', 
+            borderRadius: '8px',
+            borderLeft: '4px solid #3b82f6'
+          }}>
+            <h3>🔧 Quick Fix Steps:</h3>
+            <ol>
+              <li><strong>Start Flask Backend:</strong> Open terminal in Flask folder and run <code>python start_server.py</code></li>
+              <li><strong>Populate Database:</strong> When prompted, choose 'y' to add sample medicine data</li>
+              <li><strong>Start React Frontend:</strong> Run <code>npm start</code> in React folder</li>
+              <li><strong>Check Connection:</strong> Verify Flask server is running on http://localhost:5000</li>
+            </ol>
           </div>
         </div>
       </div>
@@ -226,11 +210,13 @@ const ProductDetail = () => {
         {selectedMedicine && selectedMedicine.name && (
           <>
             {/* Breadcrumb Navigation */}
-            <div className="product-detail__breadcrumb-nav">
-              <button className="product-detail__back-btn">
-                ← Paracetamol/acetaminophen
-              </button>
-            </div>
+            {selectedMedicine.name && (
+              <div className="product-detail__breadcrumb-nav">
+                <button className="product-detail__back-btn">
+                  ← {selectedMedicine.name}
+                </button>
+              </div>
+            )}
 
             <div className="product-detail__layout">
               {/* Main Content Area */}
@@ -274,9 +260,11 @@ const ProductDetail = () => {
                       How {selectedMedicine.name} Works
                     </h2>
                     <div className="product-detail__section-content">
-                      <p className="product-detail__description">
-                        {selectedMedicine.howItWorks || 'Consult your healthcare provider for detailed information about how this medicine works.'}
-                      </p>
+                      {selectedMedicine.howItWorks && (
+                        <p className="product-detail__description">
+                          {selectedMedicine.howItWorks}
+                        </p>
+                      )}
                     </div>
                   </section>
 
@@ -305,15 +293,12 @@ const ProductDetail = () => {
                 <div className="product-detail__alternatives">
                   <h3 className="product-detail__alternatives-title">
                     Generic Medicine Alternative
-                    {selectedMedicine && (
-                      <span className="alternatives-count">({alternativeMedicines.length} found)</span>
-                    )}
                   </h3>
                   
                   {alternativesLoading ? (
                     <div className="alternatives-loading">
                       <div className="loading-spinner"></div>
-                      <p>Finding alternatives...</p>
+                      <p>{config['loading.alternatives'] || 'Loading all products...'}</p>
                     </div>
                   ) : (
                     <div className="product-detail__alternatives-list">
@@ -325,13 +310,37 @@ const ProductDetail = () => {
                         data-category={medicine.alternativeReason}
                       >
                         <div className="product-detail__alternative-image">
-                          <img 
-                            src={medicine.image || `https://images.unsplash.com/photo-1584017911766-d451b3d0e843?w=80&h=80&fit=crop&auto=format`} 
-                            alt={medicine.name}
-                            onError={(e) => {
-                              e.target.src = `https://via.placeholder.com/80x80/00b4d8/ffffff?text=${medicine.name.charAt(0)}`;
-                            }}
-                          />
+                          {(medicine.image || medicine.imageUrl) ? (
+                            <img 
+                              src={medicine.image || medicine.imageUrl} 
+                              alt={medicine.name}
+                              style={{
+                                width: '80px',
+                                height: '80px',
+                                objectFit: 'cover',
+                                borderRadius: '4px'
+                              }}
+                              onError={(e) => {
+                                // Hide image if fails to load
+                                e.target.style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <div style={{
+                              width: '80px',
+                              height: '80px',
+                              backgroundColor: '#f3f4f6',
+                              borderRadius: '4px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '24px',
+                              color: '#6b7280',
+                              fontWeight: 'bold'
+                            }}>
+                              {medicine.name.charAt(0)}
+                            </div>
+                          )}
                         </div>
                         <div className="product-detail__alternative-info">
                           <h4 className="product-detail__alternative-name">{medicine.name}</h4>
@@ -363,7 +372,7 @@ const ProductDetail = () => {
                         ))
                       ) : (
                         <div className="no-alternatives">
-                          <p>No alternatives found for this medicine.</p>
+                          <p>No products available in the database.</p>
                         </div>
                       )}
                     </div>
@@ -375,23 +384,44 @@ const ProductDetail = () => {
             {/* Compare Medicine Section */}
             <section className="product-detail__compare-section">
               <div className="compare-section">
-                <h2 className="compare-section__title">Compare medicine</h2>
+                <h2 className="compare-section__title">{config['compare.section.title'] || 'Compare medicine'}</h2>
                 <p className="compare-section__subtitle">
-                  Compare medicine price comparison to make your decision
+                  {config['compare.section.subtitle'] || 'Compare medicine price comparison to make your decision'}
                 </p>
                 
                 {compareLoading ? (
                   <div className="compare-loading">
                     <div className="loading-spinner"></div>
-                    <p>Loading comparison data...</p>
+                    <p>{config['loading.comparison'] || 'Loading comparison data...'}</p>
                   </div>
                 ) : (
                   <div className="compare-grid">
-                    {compareMedicines && compareMedicines.slice(0, 4).map((medicine, index) => (
+                    {compareMedicines && compareMedicines
+                      .sort((a, b) => b.rating - a.rating) // Sort by rating, highest first
+                      .slice(0, 4).map((medicine, index) => (
                     <div key={medicine.id} className="compare-card">
-                      {/* Blue Pill Pack Icon */}
+                      {/* Medicine Image from Database */}
                       <div className="compare-card__image">
-                        <div className="pill-pack-icon">
+                        {(medicine.image || medicine.imageUrl) ? (
+                          <img 
+                            src={medicine.image || medicine.imageUrl} 
+                            alt={`${medicine.name} medicine`}
+                            style={{
+                              width: '120px',
+                              height: '80px',
+                              objectFit: 'cover',
+                              borderRadius: '8px',
+                              border: '2px solid #e5e7eb'
+                            }}
+                            onError={(e) => {
+                              // Fallback to blue pill pack icon if image fails to load
+                              e.target.style.display = 'none';
+                              e.target.nextElementSibling.style.display = 'block';
+                            }}
+                          />
+                        ) : null}
+                        {/* SVG icon - shows when no database image or image fails */}
+                        <div className="pill-pack-icon" style={{ display: (medicine.image || medicine.imageUrl) ? 'none' : 'block' }}>
                           <svg width="120" height="80" viewBox="0 0 120 80" fill="none">
                             <rect x="4" y="4" width="112" height="72" rx="8" fill="#2563eb" stroke="#1d4ed8" strokeWidth="3"/>
                             {/* 5x4 grid of pills */}
@@ -412,37 +442,41 @@ const ProductDetail = () => {
                       <div className="compare-card__content">
                         <h3 className="compare-card__name">{medicine.name}</h3>
                         <p className="compare-card__manufacturer">
-                          By {medicine.manufacturer || 'MICRO LABS'} LIMITED
+                          By {medicine.manufacturer}
                         </p>
                         
                         {/* Generic Name */}
                         <div className="compare-detail">
                           <span className="compare-detail__label">Generic Name:</span>
-                          <span className="compare-detail__value">{medicine.genericName} {medicine.name.includes('mg') ? medicine.name.match(/\d+mg/)?.[0] || '650 mg' : '650 mg'}</span>
+                          <span className="compare-detail__value">{medicine.genericName} {medicine.name.includes('mg') ? medicine.name.match(/\d+mg/)?.[0] : ''}</span>
                         </div>
                         
                         {/* Average Price */}
                         <div className="compare-detail">
                           <span className="compare-detail__label">Average Price:</span>
-                          <span className="compare-detail__value">Rs {medicine.price || '70'}%</span>
+                          <span className="compare-detail__value">Rs {medicine.price}</span>
                         </div>
                         
                         {/* Price Comparison */}
                         <div className="compare-card__price-section">
                           <div className="price-row">
                             <span className="price-label">Original Price</span>
-                            <span className="discount-badge">{medicine.discount || 15}% Off</span>
+                            {medicine.discount > 0 && (
+                              <span className="discount-badge">{medicine.discount}% Off</span>
+                            )}
                           </div>
                           <div className="price-row">
-                            <span className="price-original">Rs. {medicine.price || 34}</span>
-                            <span className="price-discounted">Rs. {medicine.discountedPrice || 34}</span>
+                            <span className="price-original">Rs. {medicine.price}</span>
+                            {medicine.discount > 0 && (
+                              <span className="price-discounted">Rs. {medicine.discountedPrice}</span>
+                            )}
                           </div>
                         </div>
                         
                         {/* Chemical Formation */}
                         <div className="compare-detail">
                           <span className="compare-detail__label">Chemical formation:</span>
-                          <span className="compare-detail__value">{medicine.chemicalFormula || 'CH₃CONH₂'}</span>
+                          <span className="compare-detail__value">{medicine.chemicalFormula}</span>
                         </div>
                         
                         {/* Ratings & Review */}
@@ -453,21 +487,22 @@ const ProductDetail = () => {
                               {[1, 2, 3, 4, 5].map(star => (
                                 <span 
                                   key={star} 
-                                  className={`star ${star <= Math.round(medicine.rating || 4) ? 'filled' : 'empty'}`}
+                                  className={`star ${star <= Math.round(medicine.rating) ? 'filled' : 'empty'}`}
                                 >
                                   ★
                                 </span>
                               ))}
                             </div>
-                            <span className="rating-number">{(medicine.rating || 4.0).toFixed(1)}</span>
+                            <span className="rating-number">{medicine.rating.toFixed(1)}</span>
                           </div>
                         </div>
                         
                         {/* Description */}
-                        <div className="compare-card__description">
-                          <p>* The medicine is good it is bit costly when compared with the exact generic medicine *</p>
-                          <p>* The medicine is good it is bit costly when compared with the exact generic medicine *</p>
-                        </div>
+                        {medicine.description && (
+                          <div className="compare-card__description">
+                            <p>{medicine.description}</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                     ))}
@@ -528,11 +563,11 @@ const ProductDetail = () => {
             {/* Ratings & Review Section */}
             <section className="product-detail__ratings-section">
               <div className="ratings-section">
-                <h2 className="ratings-section__title">Ratings & Review</h2>
+                <h2 className="ratings-section__title">Customer Reviews</h2>
                 
                 <div className="reviews-list">
                   {reviews && reviews.length > 0 ? (
-                    reviews.slice(0, 3).map(review => (
+                    reviews.map(review => (
                       <div key={review.id} className="review-item">
                         <div className="review-rating">
                           <div className="rating-stars">
@@ -562,7 +597,7 @@ const ProductDetail = () => {
                           ))}
                           <span className="star empty">★</span>
                         </div>
-                        <span className="rating-score">{selectedMedicine.rating || 4.0}</span>
+                        <span className="rating-score">{selectedMedicine.rating}</span>
                       </div>
                       <div className="review-content">
                         <p className="review-text">"No reviews available yet. Be the first to review this medicine!"</p>
@@ -576,15 +611,9 @@ const ProductDetail = () => {
             {/* Disclaimer Section */}
             <section className="product-detail__disclaimer-section">
               <div className="disclaimer-section">
-                <h2 className="disclaimer-section__title">Disclaimer:</h2>
+                <h2 className="disclaimer-section__title">{config['disclaimer.title'] || 'Disclaimer:'}</h2>
                 <p className="disclaimer-section__text">
-                  The contents here is for informational purposes only and not intended to be a substitute for professional medical 
-                  advice, diagnosis, or treatment. Please seek the advice of a physician or other qualified health provider with any 
-                  questions you may have regarding a medical condition. Medkart or any information and subsequent action or 
-                  inaction is solely at the user's risk, and we do not assume any responsibility for the same. The content on the Platform 
-                  should not be considered or used as a substitute for professional and qualified medical advice. Please consult your 
-                  doctor for any query pertaining to medicines, tests and/or diseases, as we support, and do not replace the doctor-
-                  patient relationship.
+                  {config['disclaimer.content']}
                 </p>
               </div>
             </section>
@@ -609,8 +638,8 @@ const ProductDetail = () => {
                       </div>
                     </div>
                     <div className="trust-indicator__content">
-                      <h3 className="trust-indicator__title">Safe and Secured</h3>
-                      <p className="trust-indicator__subtitle">Payment</p>
+                      <h3 className="trust-indicator__title">{config['trust.payment.title'] || 'Safe and Secured'}</h3>
+                      <p className="trust-indicator__subtitle">{config['trust.payment.subtitle'] || 'Payment'}</p>
                     </div>
                   </div>
 
@@ -627,8 +656,8 @@ const ProductDetail = () => {
                       </div>
                     </div>
                     <div className="trust-indicator__content">
-                      <h3 className="trust-indicator__title">100% Authentic</h3>
-                      <p className="trust-indicator__subtitle">Products</p>
+                      <h3 className="trust-indicator__title">{config['trust.authentic.title'] || '100% Authentic'}</h3>
+                      <p className="trust-indicator__subtitle">{config['trust.authentic.subtitle'] || 'Products'}</p>
                     </div>
                   </div>
 
@@ -649,8 +678,8 @@ const ProductDetail = () => {
                       </div>
                     </div>
                     <div className="trust-indicator__content">
-                      <h3 className="trust-indicator__title">6 lac + Happy</h3>
-                      <p className="trust-indicator__subtitle">Customers</p>
+                      <h3 className="trust-indicator__title">{config['trust.customers.title'] || '6 lac + Happy'}</h3>
+                      <p className="trust-indicator__subtitle">{config['trust.customers.subtitle'] || 'Customers'}</p>
                     </div>
                   </div>
                 </div>

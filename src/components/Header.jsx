@@ -127,7 +127,7 @@ const Header = () => {
         }
         break;
       default:
-        console.log('Unknown section:', section);
+        // Unknown section
     }
   };
 
@@ -143,7 +143,6 @@ const Header = () => {
     setShowProfileMenu(!showProfileMenu);
   };
 
-  // Profile action handler removed - no menu options needed
 
   const handleCartClick = () => {
     setShowCart(true);
@@ -205,7 +204,6 @@ const Header = () => {
                         <p>{user?.name || 'User'}</p>
                       </div>
                     </div>
-                    {/* Profile menu removed - no options needed */}
                   </div>
                 )}
               </div>
